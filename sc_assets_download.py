@@ -6,10 +6,11 @@ import json
 import os
 import pathlib
 import socket
+import sys
 import urllib.parse
 import urllib.request
 import zlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import concurrent.futures
 
 SC_GAME = {
     "bb": {
@@ -19,7 +20,7 @@ SC_GAME = {
         "keyVersion": 0,
         "majorVersion": 43,
         "minorVersion": 0,
-        "build": 87,
+        "build": 93,
         "contentHash": "ac990d14d8e2bc3daae758d45f865f0b51e081ec",
     },
     "bs": {
@@ -36,17 +37,17 @@ SC_GAME = {
         "address": ("game.clashroyaleapp.com", 9339),
         "assetsUrl": "http://game-assets.clashroyaleapp.com",
         "protocol": 2,
-        "keyVersion": 31,
+        "keyVersion": 14,
         "majorVersion": 3,
         "minorVersion": 0,
-        "build": 2465,
-        "contentHash": "e49eab889ba99cdf0e40d98b8b3e38b5ff443d38",
+        "build": 3074,
+        "contentHash": "c897e2c48dfa342f1470ad1b06a3e71e2f809b65",
     },
     "coc": {
         "address": ("gamea.clashofclans.com", 9339),
         "assetsUrl": "http://game-assets.clashofclans.com",
         "protocol": 3,
-        "keyVersion": 100,
+        "keyVersion": 22,
         "majorVersion": 13,
         "minorVersion": 0,
         "build": 675,
@@ -102,9 +103,6 @@ def client_handshake(game):
     header.read(2)
 
     payload = recv_until(s, length)
-    # with open(f"/data/{game}_{id}.bin", "wb") as f:
-    #     f.write(header.getvalue())
-    #     f.write(payload.getvalue())
 
     if game == "bb":
         return handle_bb(id, payload)
@@ -166,18 +164,24 @@ def dowload_fingerprint(game):
     return json.loads(data)
 
 
-def download_asset(assets_url, file, output_dir):
-    url = assets_url + "/" + file
-    with urllib.request.urlopen(url, timeout=10) as conn:
-        data = conn.read()
-
-    sub_dirs, file_name = os.path.split(file)
+def download_asset(assets_url, rel_file_path, output_dir):
+    sub_dirs, file_name = os.path.split(rel_file_path)
     output_dir = os.path.join(output_dir, sub_dirs)
     os.makedirs(output_dir, exist_ok=True)
-
     file_path = os.path.join(output_dir, file_name)
-    with open(file_path, "wb") as f:
-        f.write(data)
+    if os.path.exists(file_path):
+        return "already exists"
+
+    try:
+        url = assets_url + "/" + rel_file_path
+        with urllib.request.urlopen(url, timeout=10) as conn:
+            data = conn.read()
+        with open(file_path, "wb") as f:
+            f.write(data)
+    except Exception as e:
+        return f"{e}"
+
+    return "downloaded"
 
 
 def main(game, thread_count, output_dir, extensions):
@@ -200,25 +204,25 @@ def main(game, thread_count, output_dir, extensions):
 
     assets_url = urllib.parse.urljoin(assets_url, fingerprint["sha"])
 
-    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
         futures = {}
         for fp in fingerprint["files"]:
-            file = fp["file"]
-            file_extension = os.path.splitext(file)[-1][1:]
+            rel_file_path = fp["file"]
+            file_extension = os.path.splitext(rel_file_path)[-1][1:]
             if len(extensions) == 0 or file_extension in extensions:
                 futures[
-                    executor.submit(download_asset, assets_url, file, output_dir)
-                ] = file
+                    executor.submit(
+                        download_asset, assets_url, rel_file_path, output_dir
+                    )
+                ] = rel_file_path
 
         print(f"Downloading {len(futures)} assets from {assets_url}")
 
-        for future in as_completed(futures, timeout=10):
-            file = futures[future]
+        for future in concurrent.futures.as_completed(futures):
             try:
-                future.result()
-                print(f"  {file}")
+                print(f"  {futures[future]} {future.result(timeout=1)}")
             except Exception as e:
-                print(f"  Error: {file} {e}")
+                print(f"  Error: {futures[future]} {e}")
 
 
 if __name__ == "__main__":
@@ -249,4 +253,7 @@ if __name__ == "__main__":
 
     output_dir = args.output if args.output else os.path.dirname(__file__)
 
-    main(args.game, args.threads, output_dir, args.extensions)
+    try:
+        main(args.game, args.threads, output_dir, args.extensions)
+    except KeyboardInterrupt:
+        sys.exit(0)

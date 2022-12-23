@@ -33,10 +33,10 @@ docker run --rm -it --volume "$PWD":/data --user="$(id -u):$(id -g)" sc-assets-d
 
 ## Update
 With every game or asset update the content hashes and version numbers defined in the Python script will change.
-To update these fields yourself download the apk manually.
-You can find a `contentHash`, `majorVersion`, and `build` in the `fingerprint.json` inside the game's APK.
+To update these fields yourself download the APK manually.
+You can look up the `contentHash`, `majorVersion`, and `build` in the `fingerprint.json` inside the game's APK.
 Download the APK and find the file in the following directory `<path-to-apk>/assets`.
-You can find the needed values at the end.
+The needed values are listed at the end.
 ```
 {
   "files": [
@@ -113,7 +113,7 @@ Hidden behind session encryption.
     {"type": "STRING"},
     {"type": "VARINT"},
     {"name": "assetsUrl", "type": "STRING"},
-    {"type": "STRING"},
+    {"name": "cdnUrl", "type": "STRING"},
     {"type": "STRING"},
     {"type": "VARINT"},
     {"name": "fingerprint", "type": "ZIP_STRING"}
