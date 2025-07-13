@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -18,40 +19,40 @@ SC_GAME = {
         "assetsUrl": "http://game-assets.boombeach.com",
         "protocol": 0,
         "keyVersion": 0,
-        "majorVersion": 43,
+        "majorVersion": 52,
         "minorVersion": 0,
-        "build": 93,
-        "contentHash": "ac990d14d8e2bc3daae758d45f865f0b51e081ec",
+        "build": 103,
+        "contentHash": "a4aac756f2f41dc68fd7552a91005f55065b6afd",
     },
     "bs": {
         "address": ("game.brawlstarsgame.com", 9339),
         "assetsUrl": "http://game-assets.brawlstarsgame.com",
         "protocol": 2,
-        "keyVersion": 19,
-        "majorVersion": 32,
+        "keyVersion": 1,
+        "majorVersion": 62,
         "minorVersion": 0,
-        "build": 170,
-        "contentHash": "a241cb6a716506dfc59517a75e7236ce93d56206",
+        "build": 258,
+        "contentHash": "30c2d2b87d9c23374522cc77d718428ed27eb195",
     },
     "cr": {
         "address": ("game.clashroyaleapp.com", 9339),
         "assetsUrl": "http://game-assets.clashroyaleapp.com",
         "protocol": 2,
         "keyVersion": 14,
-        "majorVersion": 3,
-        "minorVersion": 0,
-        "build": 3074,
-        "contentHash": "c897e2c48dfa342f1470ad1b06a3e71e2f809b65",
+        "majorVersion": 7,
+        "minorVersion": 1,
+        "build": 288,
+        "contentHash": "e973bfda4887f8d0e5ed8fc921596a6c2d20c633",
     },
     "coc": {
         "address": ("gamea.clashofclans.com", 9339),
         "assetsUrl": "http://game-assets.clashofclans.com",
         "protocol": 3,
-        "keyVersion": 22,
-        "majorVersion": 13,
+        "keyVersion": 4,
+        "majorVersion": 16,
         "minorVersion": 0,
-        "build": 675,
-        "contentHash": "df960a35d591b610bf7aa6f37f9380bc28cda683",
+        "build": 654,
+        "contentHash": "ffdcbe6cfb14f18138ef6efe9ecbd4ed55b75911",
     },
     "hd": {
         "address": ("game.haydaygame.com", 9339),
@@ -106,6 +107,8 @@ def client_handshake(game):
 
     if game == "bb":
         return handle_bb(id, payload)
+    if game == "bs":
+        return handle_bs(id, payload)
     elif game == "cr":
         return handle_cr(id, payload)
 
@@ -125,6 +128,24 @@ def handle_bb(id, payload):
 
     assets_url_length = int.from_bytes(payload.read(4), byteorder="big")
     assets_url = payload.read(assets_url_length).decode("utf-8")
+
+    return assets_url, json.loads(fingerprint)
+
+
+def handle_bs(id, payload):
+    msg_type = int.from_bytes(payload.read(4), byteorder="big")
+    if id != 20103 or msg_type != 7:
+        print("Brawl Stars client version outdated!")
+        return None, None
+
+    payload.read(8)
+    assets_url_length = int.from_bytes(payload.read(4), byteorder="big")
+    assets_url = payload.read(assets_url_length).decode("utf-8")
+    payload.read(13)
+    zlib_length = int.from_bytes(payload.read(4), byteorder="big")
+    payload.read(4)
+    zlib_data = payload.read(zlib_length)
+    fingerprint = zlib.decompress(zlib_data).decode("utf-8")
 
     return assets_url, json.loads(fingerprint)
 
@@ -164,30 +185,32 @@ def dowload_fingerprint(game):
     return json.loads(data)
 
 
-def download_asset(assets_url, rel_file_path, output_dir):
-    sub_dirs, file_name = os.path.split(rel_file_path)
+def download_asset(assets_url, file, sha, output_dir):
+    sub_dirs, file_name = os.path.split(file)
     output_dir = os.path.join(output_dir, sub_dirs)
-    os.makedirs(output_dir, exist_ok=True)
     file_path = os.path.join(output_dir, file_name)
+
     if os.path.exists(file_path):
-        return "already exists"
+        with open(file_path, "rb") as f:
+            data = f.read()
+        if hashlib.sha1(data).hexdigest() == sha:
+            return file
 
-    try:
-        url = assets_url + "/" + rel_file_path
-        with urllib.request.urlopen(url, timeout=10) as conn:
-            data = conn.read()
-        with open(file_path, "wb") as f:
-            f.write(data)
-    except Exception as e:
-        return f"{e}"
+    url = assets_url + "/" + file
+    with urllib.request.urlopen(url, timeout=10) as conn:
+        data = conn.read()
 
-    return "downloaded"
+    os.makedirs(output_dir, exist_ok=True)
+    with open(file_path, "wb") as f:
+        f.write(data)
+
+    return file
 
 
 def main(game, thread_count, output_dir, extensions):
     assets_url = fingerprint = None
 
-    if game in ["bb", "cr"]:
+    if game in ["bb", "bs", "cr"]:
         assets_url, fingerprint = client_handshake(game)
     if not assets_url or not fingerprint:
         assets_url = SC_GAME[game]["assetsUrl"]
@@ -205,24 +228,32 @@ def main(game, thread_count, output_dir, extensions):
     assets_url = urllib.parse.urljoin(assets_url, fingerprint["sha"])
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
-        futures = {}
+        futures = []
         for fp in fingerprint["files"]:
-            rel_file_path = fp["file"]
-            file_extension = os.path.splitext(rel_file_path)[-1][1:]
+            file = fp["file"]
+            sha = fp["sha"]
+            file_extension = os.path.splitext(file)[-1][1:]
             if len(extensions) == 0 or file_extension in extensions:
-                futures[
-                    executor.submit(
-                        download_asset, assets_url, rel_file_path, output_dir
-                    )
-                ] = rel_file_path
+                future = executor.submit(
+                    download_asset, assets_url, file, sha, output_dir
+                )
+                futures.append(future)
 
-        print(f"Downloading {len(futures)} assets from {assets_url}")
-
-        for future in concurrent.futures.as_completed(futures):
+        total = len(futures)
+        while futures:
+            future = futures.pop(0)
             try:
-                print(f"  {futures[future]} {future.result(timeout=1)}")
+                file = future.result(timeout=0.01)
+                print(
+                    f"\r{total - executor._work_queue.qsize()}/{total} downloaded assets from {assets_url}",
+                    end="",
+                )
+                # print(f"  {file}")
+            except TimeoutError:
+                futures.append(future)
             except Exception as e:
-                print(f"  Error: {futures[future]} {e}")
+                print(f"  Error: {file} {e}")
+        print
 
 
 if __name__ == "__main__":
